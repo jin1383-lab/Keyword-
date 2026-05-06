@@ -1,6 +1,8 @@
+opencv-python
 streamlit
-pytrends
-pandas
-plotly
-xlsxwriter
-urllib3==1.26.15
+moviepy
+librosa
+numpy
+pillow
+imagehash
+ffmpeg-python
