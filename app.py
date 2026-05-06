@@ -1,145 +1,189 @@
+# app.py
+# 실행 방법:
+# 1. pip install streamlit opencv-python moviepy librosa numpy pillow imagehash
+# 2. streamlit run app.py
+
 import streamlit as st
-from pytrends.request import TrendReq
-import pandas as pd
-import time
-import random
-import plotly.express as px
+import tempfile
+import cv2
+import numpy as np
+import imagehash
+from PIL import Image
+from moviepy.editor import VideoFileClip
+import librosa
+import os
 
-# 1. 페이지 설정
-st.set_page_config(page_title="Keyword Trend Analyzer", layout="wide")
+st.set_page_config(page_title="영상 저작권 유사도 분석기", layout="wide")
 
-# 스타일 설정
-st.markdown("""
-    <style>
-    .main { background-color: #0e1117; color: #fafafa; }
-    section[data-testid="stSidebar"] { background-color: #161b22; }
-    /* 버튼 스타일 */
-    .stButton>button { 
-        width: 100%; 
-        border-radius: 8px; 
-        background-color: #deff9a; 
-        color: #000; 
-        font-weight: bold; 
-        border: none;
-        height: 3em;
-    }
-    /* 엑셀 느낌의 데이터프레임 스타일 */
-    [data-testid="stDataFrame"] {
-        border: 1px solid #30363d;
-        border-radius: 5px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+st.title("🎬 영상 저작권 유사도 분석기")
+st.write("원본 영상과 편집 영상을 업로드한 뒤 분석 버튼을 눌러주세요.")
 
-# 2. 데이터 호출 함수 (보안 및 캐싱)
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_keyword_trends(keyword, geo, timeframe):
-    """사용자가 입력한 키워드를 기반으로 유튜브 트렌드 추출"""
-    time.sleep(random.uniform(3, 6)) # 차단 방지용 지연
-    try:
-        pytrends = TrendReq(
-            hl='ko-KR', 
-            tz=540, 
-            timeout=(15, 30), 
-            retries=5, 
-            backoff_factor=2 # 429 에러 대응을 위한 지수 백오프
-        )
-        # 카테고리 0(전체)으로 설정하여 키워드 범용성 확보
-        pytrends.build_payload([keyword], cat=0, timeframe=timeframe, geo=geo, gprop='youtube')
-        related = pytrends.related_queries()
-        return {"status": "success", "data": related.get(keyword)}
-    except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg:
-            return {"status": "error", "code": 429}
-        return {"status": "error", "code": 500, "msg": error_msg}
+# -----------------------------
+# 업로드 영역
+# -----------------------------
+col1, col2 = st.columns(2)
 
-# 3. 사이드바 - 분석 설정
-st.sidebar.title("🔍 검색 설정")
+with col1:
+    original_video = st.file_uploader(
+        "📁 원본 영상 업로드",
+        type=["mp4", "mov", "avi", "mkv"]
+    )
 
-# (1) 키워드 입력 (카테고리 대체)
-search_keyword = st.sidebar.text_input("분석할 키워드 입력", placeholder="예: 레시피, 다이어트, 캠핑", help="유튜브 검색 트렌드를 파악할 핵심 키워드를 입력하세요.")
+with col2:
+    edited_video = st.file_uploader(
+        "📁 편집 영상 업로드",
+        type=["mp4", "mov", "avi", "mkv"]
+    )
 
-# (2) 국가 선택
-country_options = {"대한민국": "KR", "전세계": "", "미국": "US", "일본": "JP", "영국": "GB"}
-selected_country = st.sidebar.selectbox("대상 국가", list(country_options.keys()), index=0)
-current_geo = country_options[selected_country]
+# -----------------------------
+# 영상 저장 함수
+# -----------------------------
+def save_uploaded_file(uploaded_file):
+    temp_file = tempfile.NamedTemporaryFile(delete=False)
+    temp_file.write(uploaded_file.read())
+    return temp_file.name
 
-# (3) 기간 설정 (1주 ~ 1년)
-time_map = {
-    "1주일": "now 7-d", 
-    "1달": "today 1-m", 
-    "3개월": "today 3-m", 
-    "6개월": "today 6-m", 
-    "1년": "today 12-m"
-}
-selected_time_label = st.sidebar.select_slider("분석 기간 선택", options=list(time_map.keys()), value="1달")
-selected_timeframe = time_map[selected_time_label]
+# -----------------------------
+# 프레임 추출
+# -----------------------------
+def extract_frames(video_path, interval=30):
+    cap = cv2.VideoCapture(video_path)
+    frames = []
 
-st.sidebar.markdown("---")
-run_analysis = st.sidebar.button("🚀 분석 실행")
+    count = 0
 
-# 4. 메인 화면 구성
-st.title("📊 Keyword Search Trend Master")
-st.markdown(f"현재 검색어: **{search_keyword if search_keyword else '없음'}** | 국가: **{selected_country}** | 기간: **{selected_time_label}**")
+    while True:
+        ret, frame = cap.read()
 
-if run_analysis:
-    if not search_keyword:
-        st.warning("분석할 키워드를 입력해 주세요.")
-        st.stop()
+        if not ret:
+            break
 
-    with st.spinner(f"'{search_keyword}' 관련 유튜브 데이터를 불러오는 중..."):
-        response = get_keyword_trends(search_keyword, current_geo, selected_timeframe)
-        
-        if response["status"] == "error":
-            if response["code"] == 429:
-                st.error("🚨 구글 서버에서 일시적인 차단이 발생했습니다. IP를 변경(핫스팟 등)하거나 잠시 후 시도해 주세요.")
-            else:
-                st.error(f"❌ 오류: {response['msg']}")
-            st.stop()
-            
-        result = response["data"]
-        if result:
-            top_df = result['top']
-            rising_df = result['rising']
+        if count % interval == 0:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_img = Image.fromarray(frame_rgb)
+            frames.append(pil_img)
 
-            # --- 결과 출력 섹션 (엑셀 형식 UI) ---
-            st.markdown("---")
-            
-            # (1) 인기 검색어 섹션
-            st.subheader(f"🏆 '{search_keyword}' 인기 관련 검색어 (Top)")
-            st.caption("해당 기간 동안 가장 많이 검색된 연관 키워드입니다.")
-            if top_df is not None and not top_df.empty:
-                # 시각화 차트
-                fig_top = px.bar(top_df.head(10), x='value', y='query', orientation='h',
-                                 color='value', color_continuous_scale='Blues')
-                fig_top.update_layout(yaxis={'categoryorder':'total ascending'}, height=400)
-                st.plotly_chart(fig_top, use_container_width=True)
-                
-                # 엑셀 형식 표 출력
-                st.dataframe(top_df.rename(columns={'query': '연관 키워드', 'value': '검색 관심도(0-100)'}), use_container_width=True)
-            else:
-                st.info("데이터가 충분하지 않습니다.")
+        count += 1
 
-            st.markdown("---")
+    cap.release()
+    return frames
 
-            # (2) 급상승 검색어 섹션
-            st.subheader(f"🔥 '{search_keyword}' 급상승 관련 검색어 (Rising)")
-            st.caption("전기 대비 검색량이 급격히 늘어난 키워드입니다.")
-            if rising_df is not None and not rising_df.empty:
-                # 엑셀 형식 표 출력 (차트보다 표를 강조하기 위해 상단 배치)
-                display_rising = rising_df.copy()
-                st.dataframe(display_rising.rename(columns={'query': '연관 키워드', 'value': '상승률'}), use_container_width=True)
-                
-                # 시각화 차트
-                display_rising['numeric_value'] = display_rising['value'].apply(lambda x: 5000 if x == 'Breakout' else x)
-                fig_rising = px.bar(display_rising.head(10), x='numeric_value', y='query', orientation='h',
-                                    color='numeric_value', color_continuous_scale='Reds')
-                fig_rising.update_layout(yaxis={'categoryorder':'total ascending'}, height=400)
-                st.plotly_chart(fig_rising, use_container_width=True)
-            else:
-                st.info("급상승 데이터가 없습니다.")
+# -----------------------------
+# 영상 해시 유사도 분석
+# -----------------------------
+def compare_video_frames(video1, video2):
+    frames1 = extract_frames(video1)
+    frames2 = extract_frames(video2)
+
+    hashes1 = [imagehash.phash(frame) for frame in frames1]
+    hashes2 = [imagehash.phash(frame) for frame in frames2]
+
+    similarities = []
+
+    min_len = min(len(hashes1), len(hashes2))
+
+    for i in range(min_len):
+        diff = hashes1[i] - hashes2[i]
+        similarity = max(0, 100 - (diff * 2))
+        similarities.append(similarity)
+
+    if similarities:
+        return round(np.mean(similarities), 2)
+
+    return 0
+
+# -----------------------------
+# 오디오 추출
+# -----------------------------
+def extract_audio(video_path, output_audio):
+    clip = VideoFileClip(video_path)
+    clip.audio.write_audiofile(output_audio, logger=None)
+
+# -----------------------------
+# 오디오 유사도 분석
+# -----------------------------
+def compare_audio(video1, video2):
+    audio1 = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+    audio2 = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+
+    extract_audio(video1, audio1)
+    extract_audio(video2, audio2)
+
+    y1, sr1 = librosa.load(audio1)
+    y2, sr2 = librosa.load(audio2)
+
+    mfcc1 = librosa.feature.mfcc(y=y1, sr=sr1)
+    mfcc2 = librosa.feature.mfcc(y=y2, sr=sr2)
+
+    min_shape = min(mfcc1.shape[1], mfcc2.shape[1])
+
+    mfcc1 = mfcc1[:, :min_shape]
+    mfcc2 = mfcc2[:, :min_shape]
+
+    similarity = np.corrcoef(mfcc1.flatten(), mfcc2.flatten())[0, 1]
+
+    os.remove(audio1)
+    os.remove(audio2)
+
+    return round(max(0, similarity) * 100, 2)
+
+# -----------------------------
+# 분석 버튼
+# -----------------------------
+if st.button("🔍 분석 시작"):
+
+    if original_video and edited_video:
+
+        with st.spinner("영상 분석 중입니다..."):
+
+            original_path = save_uploaded_file(original_video)
+            edited_path = save_uploaded_file(edited_video)
+
+            # 영상 유사도
+            video_similarity = compare_video_frames(
+                original_path,
+                edited_path
+            )
+
+            # 오디오 유사도
+            audio_similarity = compare_audio(
+                original_path,
+                edited_path
+            )
+
+            # 최종 점수
+            final_score = round(
+                (video_similarity * 0.6) +
+                (audio_similarity * 0.4),
+                2
+            )
+
+        st.success("분석 완료!")
+
+        st.subheader("📊 분석 결과")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("🎞 영상 유사도", f"{video_similarity}%")
+
+        with col2:
+            st.metric("🎵 오디오 유사도", f"{audio_similarity}%")
+
+        with col3:
+            st.metric("⚠ 최종 유사도", f"{final_score}%")
+
+        # 위험도 표시
+        if final_score >= 85:
+            st.error("저작권 위험도: 매우 높음")
+        elif final_score >= 60:
+            st.warning("저작권 위험도: 중간")
         else:
-            st.warning("연관된 분석 결과가 없습니다. 검색어를 더 포괄적인 단어로 바꿔보세요.")
-else:
-    st.info("왼쪽 사이드바에서 **키워드**를 입력하고 **[분석 실행]**을 눌러주세요.")
+            st.success("저작권 위험도: 낮음")
+
+        # 임시 파일 삭제
+        os.remove(original_path)
+        os.remove(edited_path)
+
+    else:
+        st.warning("두 개의 영상을 모두 업로드해주세요.")
