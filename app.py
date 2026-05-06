@@ -55,7 +55,9 @@ temp_file = tempfile.NamedTemporaryFile(
     delete=False
 )
 
-temp_file.write(uploaded_file.read())
+temp_file.write(
+    uploaded_file.read()
+)
 
 return temp_file.name
 ```
@@ -66,7 +68,10 @@ return temp_file.name
 
 # -----------------------------------
 
-def extract_frames(video_path, frame_interval=30):
+def extract_frames(
+video_path,
+frame_interval=30
+):
 
 ```
 frames = []
@@ -80,11 +85,14 @@ try:
         if idx % frame_interval == 0:
 
             img = Image.fromarray(frame)
+
             frames.append(img)
 
 except Exception as e:
 
-    st.error(f"프레임 추출 오류: {e}")
+    st.error(
+        f"프레임 추출 오류: {e}"
+    )
 
 return frames
 ```
@@ -95,7 +103,10 @@ return frames
 
 # -----------------------------------
 
-def compare_video_frames(video1, video2):
+def compare_video_frames(
+video1,
+video2
+):
 
 ```
 frames1 = extract_frames(video1)
@@ -104,15 +115,19 @@ frames2 = extract_frames(video2)
 if len(frames1) == 0 or len(frames2) == 0:
     return 0
 
-hashes1 = [
-    imagehash.phash(frame)
-    for frame in frames1
-]
+hashes1 = []
 
-hashes2 = [
-    imagehash.phash(frame)
-    for frame in frames2
-]
+for frame in frames1:
+    hashes1.append(
+        imagehash.phash(frame)
+    )
+
+hashes2 = []
+
+for frame in frames2:
+    hashes2.append(
+        imagehash.phash(frame)
+    )
 
 similarities = []
 
@@ -144,7 +159,10 @@ return round(
 
 # -----------------------------------
 
-def extract_audio(video_path, output_audio):
+def extract_audio(
+video_path,
+output_audio
+):
 
 ```
 clip = VideoFileClip(video_path)
@@ -163,7 +181,10 @@ if clip.audio is not None:
 
 # -----------------------------------
 
-def compare_audio(video1, video2):
+def compare_audio(
+video1,
+video2
+):
 
 ```
 try:
@@ -210,7 +231,10 @@ try:
     os.remove(audio1)
     os.remove(audio2)
 
-    similarity = max(0, similarity)
+    similarity = max(
+        0,
+        similarity
+    )
 
     return round(
         similarity * 100,
@@ -219,7 +243,9 @@ try:
 
 except Exception as e:
 
-    st.error(f"오디오 분석 오류: {e}")
+    st.error(
+        f"오디오 분석 오류: {e}"
+    )
 
     return 0
 ```
@@ -235,7 +261,9 @@ if st.button("🔍 분석 시작"):
 ```
 if original_video and edited_video:
 
-    with st.spinner("영상 분석 중입니다..."):
+    with st.spinner(
+        "영상 분석 중입니다..."
+    ):
 
         original_path = save_uploaded_file(
             original_video
@@ -271,18 +299,21 @@ if original_video and edited_video:
     c1, c2, c3 = st.columns(3)
 
     with c1:
+
         st.metric(
             "🎞 영상 유사도",
             f"{video_similarity}%"
         )
 
     with c2:
+
         st.metric(
             "🎵 오디오 유사도",
             f"{audio_similarity}%"
         )
 
     with c3:
+
         st.metric(
             "⚠ 최종 유사도",
             f"{final_score}%"
