@@ -1,350 +1,72 @@
-import streamlit as st
-import tempfile
-import numpy as np
-import imagehash
-from PIL import Image
-from moviepy import VideoFileClip
-import librosa
-import imageio.v3 as iio
-import os
-
-# -----------------------------------
-
-# 페이지 설정
-
-# -----------------------------------
-
-st.set_page_config(
-page_title="영상 저작권 유사도 분석기",
-layout="wide"
-)
-
-st.title("🎬 영상 저작권 유사도 분석기")
-st.write("원본 영상과 편집 영상을 업로드한 뒤 분석 버튼을 눌러주세요.")
-
-# -----------------------------------
-
-# 파일 업로드
-
-# -----------------------------------
-
-col1, col2 = st.columns(2)
-
-with col1:
-original_video = st.file_uploader(
-"📁 원본 영상 업로드",
-type=["mp4", "mov", "avi", "mkv"]
-)
-
-with col2:
-edited_video = st.file_uploader(
-"📁 편집 영상 업로드",
-type=["mp4", "mov", "avi", "mkv"]
-)
-
-# -----------------------------------
-
-# 업로드 파일 저장
-
-# -----------------------------------
-
-def save_uploaded_file(uploaded_file):
-
-```
-temp_file = tempfile.NamedTemporaryFile(
-    delete=False
-)
-
-temp_file.write(
-    uploaded_file.read()
-)
-
-return temp_file.name
-```
-
-# -----------------------------------
-
-# 프레임 추출
-
-# -----------------------------------
-
-def extract_frames(
-video_path,
-frame_interval=30
-):
-
-```
-frames = []
-
-try:
-
-    video = iio.imiter(video_path)
-
-    for idx, frame in enumerate(video):
-
-        if idx % frame_interval == 0:
-
-            img = Image.fromarray(frame)
-
-            frames.append(img)
-
-except Exception as e:
-
-    st.error(
-        f"프레임 추출 오류: {e}"
-    )
-
-return frames
-```
-
-# -----------------------------------
-
-# 영상 유사도 분석
-
-# -----------------------------------
-
-def compare_video_frames(
-video1,
-video2
-):
-
-```
-frames1 = extract_frames(video1)
-frames2 = extract_frames(video2)
-
-if len(frames1) == 0 or len(frames2) == 0:
-    return 0
-
-hashes1 = []
-
-for frame in frames1:
-    hashes1.append(
-        imagehash.phash(frame)
-    )
-
-hashes2 = []
-
-for frame in frames2:
-    hashes2.append(
-        imagehash.phash(frame)
-    )
-
-similarities = []
-
-min_len = min(
-    len(hashes1),
-    len(hashes2)
-)
-
-for i in range(min_len):
-
-    diff = hashes1[i] - hashes2[i]
-
-    similarity = max(
-        0,
-        100 - (diff * 2)
-    )
-
-    similarities.append(similarity)
-
-return round(
-    np.mean(similarities),
-    2
-)
-```
-
-# -----------------------------------
-
-# 오디오 추출
-
-# -----------------------------------
-
-def extract_audio(
-video_path,
-output_audio
-):
-
-```
-clip = VideoFileClip(video_path)
-
-if clip.audio is not None:
-
-    clip.audio.write_audiofile(
-        output_audio,
-        logger=None
-    )
-```
-
-# -----------------------------------
-
-# 오디오 유사도 분석
-
-# -----------------------------------
-
-def compare_audio(
-video1,
-video2
-):
-
-```
-try:
-
-    audio1 = tempfile.NamedTemporaryFile(
-        suffix=".wav",
-        delete=False
-    ).name
-
-    audio2 = tempfile.NamedTemporaryFile(
-        suffix=".wav",
-        delete=False
-    ).name
-
-    extract_audio(video1, audio1)
-    extract_audio(video2, audio2)
-
-    y1, sr1 = librosa.load(audio1)
-    y2, sr2 = librosa.load(audio2)
-
-    mfcc1 = librosa.feature.mfcc(
-        y=y1,
-        sr=sr1
-    )
-
-    mfcc2 = librosa.feature.mfcc(
-        y=y2,
-        sr=sr2
-    )
-
-    min_shape = min(
-        mfcc1.shape[1],
-        mfcc2.shape[1]
-    )
-
-    mfcc1 = mfcc1[:, :min_shape]
-    mfcc2 = mfcc2[:, :min_shape]
-
-    similarity = np.corrcoef(
-        mfcc1.flatten(),
-        mfcc2.flatten()
-    )[0, 1]
-
-    os.remove(audio1)
-    os.remove(audio2)
-
-    similarity = max(
-        0,
-        similarity
-    )
-
-    return round(
-        similarity * 100,
-        2
-    )
-
-except Exception as e:
-
-    st.error(
-        f"오디오 분석 오류: {e}"
-    )
-
-    return 0
-```
-
-# -----------------------------------
-
-# 분석 버튼
-
-# -----------------------------------
-
-if st.button("🔍 분석 시작"):
-
-```
-if original_video and edited_video:
-
-    with st.spinner(
-        "영상 분석 중입니다..."
-    ):
-
-        original_path = save_uploaded_file(
-            original_video
+import time
+import random
+from pytrends.request import TrendReq
+from requests.exceptions import Timeout, ConnectionError
+
+class TrendHashtagGenerator:
+    def __init__(self):
+        # 1. 세션 유지 및 타임아웃 설정
+        self.pytrends = TrendReq(
+            hl='ko-KR', 
+            tz=360, 
+            retries=3,          # 자체 재시도 설정
+            backoff_factor=0.5, # 지연 계수
+            timeout=(10, 25)    # (연결 타임아웃, 읽기 타임아웃)
         )
 
-        edited_path = save_uploaded_file(
-            edited_video
-        )
+    def get_context_with_retry(self, keyword, geo, max_retries=3):
+        """에러 발생 시 지수 백오프를 적용하여 재시도하는 로직"""
+        for i in range(max_retries):
+            try:
+                # 요청 간 랜덤 지연 (429 에러 방지의 핵심)
+                time.sleep(random.uniform(2, 5)) 
+                
+                self.pytrends.build_payload([keyword], geo=geo, timeframe='now 7-d')
+                related = self.pytrends.related_queries()
+                
+                rising = related[keyword]['rising']
+                return rising['query'].head(5).tolist() if rising is not None and not rising.empty else []
+            
+            except Exception as e:
+                wait_time = (2 ** i) + random.random() # 2, 4, 8초... 점진적 증가
+                print(f"⚠️ {geo} 데이터 로드 실패 ({e}). {wait_time:.2f}초 후 재시도...")
+                time.sleep(wait_time)
+        
+        return [] # 모든 재시도 실패 시 빈 리스트 반환
 
-        # 영상 유사도
-        video_similarity = compare_video_frames(
-            original_path,
-            edited_path
-        )
+    def generate_final_prompt(self, emotion_keyword):
+        countries = {'KR': 'ko', 'US': 'en-US', 'JP': 'ja'}
+        context_results = {}
 
-        # 오디오 유사도
-        audio_similarity = compare_audio(
-            original_path,
-            edited_path
-        )
+        for code in countries.keys():
+            print(f"🔍 {code} 트렌드 데이터 수집 중...")
+            context_results[code] = self.get_context_with_retry(emotion_keyword, code)
 
-        # 최종 점수
-        final_score = round(
-            (video_similarity * 0.6) +
-            (audio_similarity * 0.4),
-            2
-        )
+        # Gemini에게 보낼 최종 프롬프트 구성
+        prompt = f"""
+        당신은 다국어 SNS 마케팅 전문가입니다. 
+        사용자가 입력한 감정 키워드 '{emotion_keyword}'와 관련된 최신 구글 트렌드 데이터를 기반으로 
+        인스타그램/스레드용 해시태그를 생성하세요.
 
-    st.success("✅ 분석 완료")
+        [구글 트렌드 실시간 연관어]
+        - 한국: {context_results['KR']}
+        - 미국: {context_results['US']}
+        - 일본: {context_results['JP']}
 
-    st.subheader("📊 분석 결과")
+        [출력 규칙]
+        1. 각 국가별로 10개의 해시태그를 생성할 것.
+        2. 일본어는 현지인들이 자주 쓰는 감성 태그(예: #～と繋がりたい)를 반드시 포함할 것.
+        3. 결과는 아래와 같이 언어별 코드 블록으로 제공하여 복사가 가능하게 할 것.
+        
+        ### 🇰🇷 한국어 태그
+        ```
+        #태그1 #태그2 ...
+        ```
+        (영어, 일본어도 동일한 형식)
+        """
+        return prompt
 
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-
-        st.metric(
-            "🎞 영상 유사도",
-            f"{video_similarity}%"
-        )
-
-    with c2:
-
-        st.metric(
-            "🎵 오디오 유사도",
-            f"{audio_similarity}%"
-        )
-
-    with c3:
-
-        st.metric(
-            "⚠ 최종 유사도",
-            f"{final_score}%"
-        )
-
-    # 위험도 표시
-    if final_score >= 85:
-
-        st.error(
-            "🚨 저작권 위험도: 매우 높음"
-        )
-
-    elif final_score >= 60:
-
-        st.warning(
-            "⚠ 저작권 위험도: 중간"
-        )
-
-    else:
-
-        st.success(
-            "✅ 저작권 위험도: 낮음"
-        )
-
-    # 임시 파일 삭제
-    os.remove(original_path)
-    os.remove(edited_path)
-
-else:
-
-    st.warning(
-        "두 개의 영상을 모두 업로드해주세요."
-    )
-```
+# 사용 예시
+generator = TrendHashtagGenerator()
+final_prompt = generator.generate_final_prompt("행복")
+print(final_prompt)
