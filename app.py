@@ -1,25 +1,25 @@
-import googleapiclient.discovery
+# [1단계] 사용자 입력 받기 (이름, 핸들, ID 모두 가능)
+user_input = st.text_input("분석할 채널명 또는 핸들을 입력하세요", placeholder="예: 조슈아 매거진, @joshuamagazine")
 
-def get_channel_id(search_query, api_key):
-    youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=api_key)
-    
-    # [핵심] search.list 메서드 호출
-    request = youtube.search().list(
+if st.button("분석 시작"):
+    # [2단계] 자연어 검색을 통해 채널 ID 추출 (search.list 사용)
+    search_res = youtube.search().list(
         part="snippet",
-        q=search_query,      # 사용자가 입력한 자연어 (예: "슈카월드")
-        type="channel",      # 채널만 검색하도록 설정
-        maxResults=1,        # 가장 정확한 결과 1개만 요청
+        q=user_input,
+        type="channel",
+        maxResults=1,
         relevanceLanguage="ko"
-    )
-    response = request.execute()
+    ).execute()
 
-    if response['items']:
-        # 검색 결과의 첫 번째 채널 정보 추출
-        channel_id = response['items'][0]['id']['channelId']
-        channel_title = response['items'][0]['snippet']['title']
-        return channel_id, channel_title
+    if not search_res.get('items'):
+        st.error("입력하신 키워드로 채널을 찾을 수 없습니다.")
     else:
-        return None, "검색 결과 없음"
+        # 드디어 찾은 진짜 채널 ID!
+        target_channel_id = search_res['items'][0]['id']['channelId']
+        target_title = search_res['items'][0]['snippet']['title']
+        
+        st.success(f"🎯 분석 대상 확정: {target_title} (ID: {target_channel_id})")
 
-# 사용 예시
-# my_id, my_title = get_channel_id("조슈아 매거진", "YOUR_API_KEY")
+        # [3단계] 이제 이 ID를 가지고 앞서 만든 '상세 지표(구독자, 조회수)' 수집으로 연결
+        # stats_res = youtube.channels().list(part="statistics...", id=target_channel_id).execute()
+        # ... 이후 필터링 및 키워드 추출 로직 실행 ...
