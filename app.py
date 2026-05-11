@@ -1,46 +1,56 @@
 import streamlit as st
 import googleapiclient.discovery
 
-# 1. 페이지 설정
-st.set_page_config(page_title="YouTube Channel Finder", page_icon="📺")
-st.title("📺 유사 채널 탐색기")
-st.markdown("기준 채널의 메타데이터와 토픽을 분석해 비슷한 채널을 추천합니다.")
+st.set_page_config(page_title="YouTube Smart Finder", page_icon="🔍")
+st.title("🔍 유튜브 핸들 기반 유사 채널 탐색기")
 
-# 2. API 키 설정 (Streamlit Secrets 또는 사이드바 입력)
-# 로컬 테스트 시에는 사이드바에 입력하거나 .streamlit/secrets.toml을 사용하세요.
-api_key = st.sidebar.text_input("YouTube API Key를 입력하세요", type="password")
+api_key = st.sidebar.text_input("YouTube API Key", type="password")
 
 if api_key:
     youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=api_key)
 
-    # 3. 사용자 입력
-    target_id = st.text_input("분석할 채널 ID를 입력하세요 (예: UC_x5XG1OV2P6uYZ5FHS9vNg)")
+    # 사용자 입력 (핸들 또는 ID 모두 대응 가능하도록 설계)
+    user_input = st.text_input("채널 핸들(@handle) 또는 ID를 입력하세요", placeholder="@google")
 
-    if st.button("유사 채널 찾기"):
+    if st.button("분석 시작"):
         try:
-            # [STEP 1] 기준 채널 데이터 가져오기
+            # [STEP 1] 핸들로 채널 ID 추출하기
+            # 핸들에서 @가 포함되어 있다면 제거하고 검색
+            clean_handle = user_input.replace("@", "")
+            
+            # forHandle 파라미터를 사용하여 채널 정보 조회
             ch_request = youtube.channels().list(
-                part="snippet,topicDetails,brandingSettings",
-                id=target_id
+                part="id,snippet,topicDetails,brandingSettings",
+                forHandle=clean_handle
             )
             ch_response = ch_request.execute()
 
-            if not ch_response['items']:
-                st.error("채널을 찾을 수 없습니다. ID를 확인해주세요.")
+            # 핸들로 검색 결과가 없을 경우 (혹시 ID를 직접 입력했을 경우를 대비한 예외 처리)
+            if not ch_response.get('items'):
+                ch_request = youtube.channels().list(
+                    part="id,snippet,topicDetails,brandingSettings",
+                    id=user_input
+                )
+                ch_response = ch_request.execute()
+
+            if not ch_response.get('items'):
+                st.error("채널을 찾을 수 없습니다. 핸들을 정확히 입력했는지 확인해주세요.")
             else:
                 item = ch_response['items'][0]
+                target_id = item['id'] # 추출된 진짜 ID
                 ch_title = item['snippet']['title']
+                
+                st.success(f"✅ 채널 확인 완료: **{ch_title}** (ID: {target_id})")
+                
+                # [STEP 2] 메타데이터 분석 및 검색어 조합
                 keywords = item.get('brandingSettings', {}).get('channel', {}).get('keywords', "")
                 topics = item.get('topicDetails', {}).get('topicCategories', [])
-                topic_kw = topics[0].split('/')[-1] if topics else ""
+                topic_kw = topics[0].split('/')[-1] if topics else "Video"
                 
-                # 검색어 조합
+                # 검색어 조합 (주제 + 채널 키워드 첫 번째 단어)
                 query = f"{topic_kw} {keywords.split(' ')[0] if keywords else ''}".strip()
 
-                st.subheader(f"🔍 '{ch_title}' 분석 결과")
-                st.info(f"분석된 핵심 키워드: **{query}**")
-
-                # [STEP 2] 유사 채널 검색
+                # [STEP 3] 유사 채널 검색
                 search_request = youtube.search().list(
                     part="snippet",
                     q=query,
@@ -50,12 +60,13 @@ if api_key:
                 )
                 search_response = search_request.execute()
 
-                # [STEP 3] 결과 출력 (Grid 레이아웃)
+                # [STEP 4] 결과 출력
                 st.divider()
-                cols = st.columns(3) # 3열로 출력
+                st.subheader(f"💡 '{ch_title}'와 비슷한 추천 채널")
+                cols = st.columns(3)
                 
                 count = 0
-                for i, res in enumerate(search_response['items']):
+                for res in search_response['items']:
                     sim_id = res['snippet']['channelId']
                     if sim_id == target_id: continue
                     
@@ -70,4 +81,4 @@ if api_key:
         except Exception as e:
             st.error(f"오류가 발생했습니다: {e}")
 else:
-    st.warning("왼쪽 사이드바에 API Key를 입력해야 기능이 활성화됩니다.")
+    st.warning("사이드바에 API Key를 입력해주세요.")
