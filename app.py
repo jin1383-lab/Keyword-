@@ -1,72 +1,68 @@
-import time
-import random
-from pytrends.request import TrendReq
-from requests.exceptions import Timeout, ConnectionError
+import googleapiclient.discovery
 
-class TrendHashtagGenerator:
-    def __init__(self):
-        # 1. 세션 유지 및 타임아웃 설정
-        self.pytrends = TrendReq(
-            hl='ko-KR', 
-            tz=360, 
-            retries=3,          # 자체 재시도 설정
-            backoff_factor=0.5, # 지연 계수
-            timeout=(10, 25)    # (연결 타임아웃, 읽기 타임아웃)
-        )
+# 1. API 설정
+API_KEY = "YOUR_API_KEY_HERE"
+youtube = googleapiclient.discovery.build("youtube", "v3", developerKey=API_KEY)
 
-    def get_context_with_retry(self, keyword, geo, max_retries=3):
-        """에러 발생 시 지수 백오프를 적용하여 재시도하는 로직"""
-        for i in range(max_retries):
-            try:
-                # 요청 간 랜덤 지연 (429 에러 방지의 핵심)
-                time.sleep(random.uniform(2, 5)) 
-                
-                self.pytrends.build_payload([keyword], geo=geo, timeframe='now 7-d')
-                related = self.pytrends.related_queries()
-                
-                rising = related[keyword]['rising']
-                return rising['query'].head(5).tolist() if rising is not None and not rising.empty else []
-            
-            except Exception as e:
-                wait_time = (2 ** i) + random.random() # 2, 4, 8초... 점진적 증가
-                print(f"⚠️ {geo} 데이터 로드 실패 ({e}). {wait_time:.2f}초 후 재시도...")
-                time.sleep(wait_time)
+def get_precise_similar_channels(target_channel_id):
+    # [STEP 1] 타겟 채널의 상세 정보(주제, 키워드, 카테고리) 가져오기
+    channel_request = youtube.channels().list(
+        part="snippet,topicDetails,brandingSettings",
+        id=target_channel_id
+    )
+    channel_response = channel_request.execute()
+
+    if not channel_response['items']:
+        print("채널을 찾을 수 없습니다.")
+        return
+
+    item = channel_response['items'][0]
+    channel_title = item['snippet']['title']
+    
+    # 1-1. 메타 태그(Keywords) 추출
+    # 채널 설정에 등록된 키워드들을 가져옵니다.
+    keywords = item.get('brandingSettings', {}).get('channel', {}).get('keywords', "")
+    # 1-2. 주제(Topic) 추출
+    topics = item.get('topicDetails', {}).get('topicCategories', [])
+    topic_keyword = topics[0].split('/')[-1] if topics else ""
+
+    # [검색어 조합 전략] 
+    # 채널 키워드 중 앞부분 일부와 주제 단어를 조합하여 검색 정밀도를 높입니다.
+    refined_query = f"{topic_keyword} {keywords.split(' ')[0] if keywords else ''}".strip()
+    
+    print(f"🔍 기준 채널: {channel_title}")
+    print(f"🏷️ 분석된 조합 키워드: {refined_query}")
+    print("-" * 50)
+
+    # [STEP 2] 카테고리 ID 고정 및 검색 실행
+    # 유튜브에서 가장 활발한 '엔터테인먼트(24)' 또는 '노하우/스타일(26)' 등으로 고정 가능합니다.
+    # 여기서는 검색 시 가장 범용적인 'Video' 카테고리 성격에 맞게 쿼리를 던집니다.
+    search_request = youtube.search().list(
+        part="snippet",
+        q=refined_query,
+        type="channel",
+        maxResults=15,
+        relevanceLanguage="ko",
+        # videoCategoryId는 search(type='video')일 때만 작동하므로, 
+        # 채널 검색에서는 q(검색어)에 카테고리 성격 단어를 포함하는 것이 가장 정확합니다.
+        topicId="/m/019_v2" # 예: '보안/기술' 관련 토픽 ID (필요시 변경 가능)
+    )
+    search_response = search_request.execute()
+
+    # [STEP 3] 결과 출력
+    print(f"✅ '{channel_title}' 채널과 메타데이터가 유사한 채널:")
+    count = 0
+    for item in search_response['items']:
+        sim_title = item['snippet']['title']
+        sim_id = item['snippet']['channelId']
         
-        return [] # 모든 재시도 실패 시 빈 리스트 반환
+        if sim_id != target_channel_id:
+            count += 1
+            print(f"{count}. {sim_title}")
+            print(f"   - 채널 링크: https://www.youtube.com/channel/{sim_id}")
 
-    def generate_final_prompt(self, emotion_keyword):
-        countries = {'KR': 'ko', 'US': 'en-US', 'JP': 'ja'}
-        context_results = {}
-
-        for code in countries.keys():
-            print(f"🔍 {code} 트렌드 데이터 수집 중...")
-            context_results[code] = self.get_context_with_retry(emotion_keyword, code)
-
-        # Gemini에게 보낼 최종 프롬프트 구성
-        prompt = f"""
-        당신은 다국어 SNS 마케팅 전문가입니다. 
-        사용자가 입력한 감정 키워드 '{emotion_keyword}'와 관련된 최신 구글 트렌드 데이터를 기반으로 
-        인스타그램/스레드용 해시태그를 생성하세요.
-
-        [구글 트렌드 실시간 연관어]
-        - 한국: {context_results['KR']}
-        - 미국: {context_results['US']}
-        - 일본: {context_results['JP']}
-
-        [출력 규칙]
-        1. 각 국가별로 10개의 해시태그를 생성할 것.
-        2. 일본어는 현지인들이 자주 쓰는 감성 태그(예: #～と繋がりたい)를 반드시 포함할 것.
-        3. 결과는 아래와 같이 언어별 코드 블록으로 제공하여 복사가 가능하게 할 것.
-        
-        ### 🇰🇷 한국어 태그
-        ```
-        #태그1 #태그2 ...
-        ```
-        (영어, 일본어도 동일한 형식)
-        """
-        return prompt
-
-# 사용 예시
-generator = TrendHashtagGenerator()
-final_prompt = generator.generate_final_prompt("행복")
-print(final_prompt)
+# 2. 실행 (분석하고 싶은 채널 ID 입력)
+if __name__ == "__main__":
+    # 테스트용 채널 ID 입력
+    target_id = "UC_x5XG1OV2P6uYZ5FHS9vNg" 
+    get_precise_similar_channels(target_id)
