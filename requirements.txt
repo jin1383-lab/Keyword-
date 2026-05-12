@@ -1,1 +1,3 @@
-pip install youtube-transcript-api
+streamlit
+google-api-python-client
+youtube-transcript-api
